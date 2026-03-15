@@ -1,4 +1,5 @@
 ptrack
 src/*.o
+tests/test_fetch
 *.ptrack_state
 .ptrack_state

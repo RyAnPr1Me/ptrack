@@ -5,6 +5,10 @@
 #include <stdlib.h>
 #include <string.h>
 #include <time.h>
+#include <ctype.h>
+#include <unistd.h>
+#include <sys/types.h>
+#include <sys/wait.h>
 
 /* ---------- Email body builder ------------------------------------------ */
 
@@ -141,7 +145,7 @@ static int send_via_smtp(const Config *cfg,
     if (cfg->smtp_user[0]) {
         curl_easy_setopt(curl, CURLOPT_USERNAME, cfg->smtp_user);
         curl_easy_setopt(curl, CURLOPT_PASSWORD, cfg->smtp_pass);
-        curl_easy_setopt(curl, CURLOPT_LOGIN_OPTIONS, "AUTH=LOGIN PLAIN");
+        /* Let libcurl auto-negotiate the best authentication method */
     }
 
     /* Use STARTTLS if not already smtps:// */
@@ -157,21 +161,77 @@ static int send_via_smtp(const Config *cfg,
 
 /* ---------- sendmail fallback ------------------------------------------- */
 
-static int send_via_sendmail(const Config *cfg,
-                              const char *msg)
+/*
+ * Check that an email address string is safe to pass as an exec argument.
+ * A valid address contains only: alnum . @ _ - +
+ * Returns 1 if safe, 0 if not.
+ */
+static int email_is_safe(const char *email)
 {
-    /* Build command; sendmail -t reads To:/From:/Subject: from the message */
-    char cmd[MAX_EMAIL_LEN + 32];
-    snprintf(cmd, sizeof(cmd), "sendmail -t -f '%s'", cfg->email_from);
+    if (!email || !*email)
+        return 0;
+    for (const char *p = email; *p; p++) {
+        unsigned char c = (unsigned char)*p;
+        if (!isalnum(c) && c != '@' && c != '.' &&
+            c != '_'    && c != '-' && c != '+')
+            return 0;
+    }
+    return 1;
+}
 
-    FILE *fp = popen(cmd, "w");
-    if (!fp)
+static int send_via_sendmail(const Config *cfg, const char *msg)
+{
+    /* Validate email_from before passing to exec to prevent argument
+     * injection even via exec (e.g. options disguised as addresses). */
+    if (!email_is_safe(cfg->email_from)) {
+        fprintf(stderr,
+                "ptrack: unsafe characters in email_from; "
+                "cannot use sendmail fallback.\n");
+        return -1;
+    }
+
+    int pipefd[2];
+    if (pipe(pipefd) != 0)
         return -1;
 
-    fputs(msg, fp);
+    pid_t pid = fork();
+    if (pid < 0) {
+        close(pipefd[0]);
+        close(pipefd[1]);
+        return -1;
+    }
 
-    int ret = pclose(fp);
-    return (ret == 0) ? 0 : -1;
+    if (pid == 0) {
+        /* Child: wire read-end of pipe to stdin, then exec sendmail */
+        close(pipefd[1]);
+        if (dup2(pipefd[0], STDIN_FILENO) == -1)
+            _exit(127);
+        close(pipefd[0]);
+        /* sendmail -t  : read recipient from To: header
+         * sendmail -f  : set envelope sender (safe; validated above) */
+        execl("/usr/sbin/sendmail", "sendmail", "-t",
+              "-f", cfg->email_from, (char *)NULL);
+        /* If /usr/sbin/sendmail is not found, try PATH */
+        execlp("sendmail", "sendmail", "-t",
+               "-f", cfg->email_from, (char *)NULL);
+        _exit(127);
+    }
+
+    /* Parent: write message to the pipe then wait for child */
+    close(pipefd[0]);
+    size_t total = strlen(msg);
+    size_t written = 0;
+    while (written < total) {
+        ssize_t n = write(pipefd[1], msg + written, total - written);
+        if (n <= 0)
+            break;
+        written += (size_t)n;
+    }
+    close(pipefd[1]);
+
+    int status = 0;
+    waitpid(pid, &status, 0);
+    return (WIFEXITED(status) && WEXITSTATUS(status) == 0) ? 0 : -1;
 }
 
 /* ---------- Public API -------------------------------------------------- */

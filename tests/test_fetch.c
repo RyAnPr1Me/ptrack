@@ -32,14 +32,11 @@ static const char *skip_currency_sym(const char *s)
     return s;
 }
 
+static int is_currency_sym(const char *s) __attribute__((unused));
 static int is_currency_sym(const char *s)
 {
     return skip_currency_sym(s) != s;
 }
-
-/* Suppress unused-function warning */
-static void _use_helpers(void) __attribute__((unused));
-static void _use_helpers(void) { (void)is_currency_sym; }
 
 static double parse_price(const char *s)
 {

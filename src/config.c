@@ -62,7 +62,7 @@ int config_load(Config *cfg, const char *path)
         return -1;
 
     char line[1024];
-    while (fgets(line, (int)sizeof(line), f)) {
+    while (fgets(line, sizeof(line), f)) {
         char *p = trim(line);
         if (!*p || *p == '#' || *p == ';')
             continue;

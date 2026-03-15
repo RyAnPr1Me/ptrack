@@ -197,7 +197,7 @@ static double parse_price(const char *s)
             if (buf[k] != ',')
                 norm[j++] = buf[k];
         norm[j] = '\0';
-        strcpy(buf, norm);
+        memcpy(buf, norm, (size_t)j + 1);
     }
     /* dots > 1: probably a version string – ignore */
     if (dots > 1)
