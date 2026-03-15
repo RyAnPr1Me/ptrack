@@ -1,0 +1,4 @@
+ptrack
+src/*.o
+*.ptrack_state
+.ptrack_state
